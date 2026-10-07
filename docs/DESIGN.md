@@ -116,3 +116,35 @@ Short decision records. Format: Context, Options, Choice, Consequences.
 - **Consequences:** `ConcurrentMapCache` respects `size() <= capacity` but makes no
   eviction-order promise, which is why the exact-LRU tests live in the
   implementation-specific test classes rather than in `AbstractCacheTest`.
+
+## Evidence: do the concurrency tests have teeth?
+
+Recorded from the scratch branch `scratch/remove-lock-demo`, where the only change
+was deleting the lock acquisition and release in `LockedLruStore.compute`
+(main is unaffected and still guarded). Command and raw output:
+
+```
+$ mvn -B -pl cache-core test -Dtest='GlobalLockConcurrencyTest#noLostUpdatesUnderContention'
+
+[ERROR] Tests run: 50, Failures: 50, Errors: 0, Skipped: 0, Time elapsed: 1.523 s <<< FAILURE! -- in com.concurrentcache.core.GlobalLockConcurrencyTest
+org.opentest4j.AssertionFailedError: expected: <Optional[320000]> but was: <Optional[26897]>
+org.opentest4j.AssertionFailedError: expected: <Optional[320000]> but was: <Optional[60017]>
+org.opentest4j.AssertionFailedError: expected: <Optional[320000]> but was: <Optional[40319]>
+org.opentest4j.AssertionFailedError: expected: <Optional[320000]> but was: <Optional[36848]>
+org.opentest4j.AssertionFailedError: expected: <Optional[320000]> but was: <Optional[41853]>
+```
+
+With the lock restored on `main`, the same test passes, raw output:
+
+```
+$ mvn -B -pl cache-core test -Dtest='GlobalLockConcurrencyTest#noLostUpdatesUnderContention'
+
+[INFO] Tests run: 50, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.208 s -- in com.concurrentcache.core.GlobalLockConcurrencyTest
+[INFO] Tests run: 50, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+```
+
+Two things this demonstrates: the assertion is strong enough to detect a missing
+lock in 50 out of 50 repetitions, and the failure mode is lost updates (a value
+near 27k instead of 320k), not a crash — which is exactly the bug type that
+silent, unlocked read-modify-write code produces.
