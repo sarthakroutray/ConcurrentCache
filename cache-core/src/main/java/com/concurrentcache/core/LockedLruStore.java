@@ -98,27 +98,22 @@ final class LockedLruStore<K, V> {
     V compute(K key, BiFunction<K, V, V> remappingFunction) {
         Objects.requireNonNull(key, "key");
         Objects.requireNonNull(remappingFunction, "remappingFunction");
-        lock.lock();
-        try {
-            long now = timeSource.getAsLong();
-            Entry<V> entry = map.get(key);
-            if (entry != null && now >= entry.expiresAtNanos()) {
-                map.remove(key);
-                stats.recordExpiration();
-                entry = null;
-            }
-            V updated = remappingFunction.apply(key, entry == null ? null : entry.value());
-            if (updated == null) {
-                map.remove(key);
-                return null;
-            }
-            long expiresAtNanos = entry == null ? now + defaultTtlNanos : entry.expiresAtNanos();
-            map.put(key, new Entry<>(updated, expiresAtNanos));
-            evictOverflow();
-            return updated;
-        } finally {
-            lock.unlock();
+        long now = timeSource.getAsLong();
+        Entry<V> entry = map.get(key);
+        if (entry != null && now >= entry.expiresAtNanos()) {
+            map.remove(key);
+            stats.recordExpiration();
+            entry = null;
         }
+        V updated = remappingFunction.apply(key, entry == null ? null : entry.value());
+        if (updated == null) {
+            map.remove(key);
+            return null;
+        }
+        long expiresAtNanos = entry == null ? now + defaultTtlNanos : entry.expiresAtNanos();
+        map.put(key, new Entry<>(updated, expiresAtNanos));
+        evictOverflow();
+        return updated;
     }
 
     long liveSize() {
