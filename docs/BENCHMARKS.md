@@ -74,12 +74,15 @@ hit-ratio measurement, not a timing benchmark, so it is a plain JUnit test.
 Command:
 
 ```bash
-mvn -B -pl cache-bench -am test -Dtest=EvictionQualityTest
+mvn -B -pl cache-bench -am test \
+  -Dtest=EvictionQualityTest \
+  -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
-Workload: capacity 64, key space 512, 200,000 get-then-put operations, seed 42,
-half the traffic aimed at the first 10% of the key space (skewed Zipf-like access,
-the shape a real cache sees).
+Workload: capacity 64, key space 512, 200,000 get-then-put operations, seed 42.
+For each operation, half the time a key is chosen uniformly from the first 51
+keys; otherwise a key is chosen uniformly from the remaining 461 keys. This is
+a two-tier uniform distribution, not a Zipf distribution.
 
 Raw output:
 
@@ -92,24 +95,19 @@ concurrent_map   hitRatio=0.0865
 
 ### Honest interpretation
 
-The result contradicts the naive expectation that global LRU should win, so it is
-worth being precise about it:
+Interpretation is limited to this workload and seed:
 
-- **The baseline loses badly, as predicted** — 0.0865 vs 0.3056, a 3.5× gap. With
-  no ordering bookkeeping, `ConcurrentMapCache` throws away entries in iteration
-  order and destroys its own hot set. DR-008 says eviction order is a deliberate
-  non-goal for the baseline; this quantifies the price.
-- **Segmenting did *not* measurably hurt LRU quality here.** `segmented_a` and
-  `segmented_b` came out at 0.3086, marginally *above* `global` at 0.3056. DR-006
-  predicted that segmenting makes global LRU approximate and therefore worse. On
-  this particular workload it did not: with capacity 64 over 16 segments each
-  segment holds 4 slots, and the skew is shallow enough that each segment's local
-  LRU catches most of its own reuse. A harsher skew (or a key distribution that
-  concentrates into few segments) would be needed to expose the penalty.
-- Because the difference between the LRU variants is within noise and the
-  direction is not what DR-006 predicted, `EvictionQualityTest` asserts **only**
-  the robust claim — every LRU variant beats the unordered baseline — and prints
-  the rest instead of pretending to a margin the data does not support.
+- `ConcurrentMapCache` scored 0.0865, compared with 0.3056–0.3086 for the three
+  LRU variants. This fixed test shows a lower hit ratio for the unordered
+  baseline under this operation sequence; it does not estimate performance over
+  a population of workloads.
+- `segmented_a` and `segmented_b` scored 0.3086, while `global` scored 0.3056.
+  The test uses a single seed and does not measure variation across seeds or key
+  distributions, so it cannot establish whether this small difference is
+  meaningful or explain its cause.
+- `EvictionQualityTest` asserts only that all LRU implementations score higher
+  than the baseline for this fixed input, and prints all scores. It does not
+  assert an ordering among the LRU variants.
 
 ## Reproducing
 

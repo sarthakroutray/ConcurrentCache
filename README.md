@@ -180,23 +180,26 @@ Linux 7.0.0-43, OpenJDK 25.0.5.
 
 ### What the numbers say
 
-- **Segmentation pays off.** `SegmentedLockCache` is ~2.9× faster than
-  `GlobalLockCache` on the hot read set and ~2.6× on the wide set, purely from
-  independent locks.
-- **The read/write lock pays off for reads, not writes.** On reads
-  `SegmentedRwLockCache` is ~3.0× faster than `GlobalLockCache` and ~2.1× faster
-  than `SegmentedLockCache`, because readers no longer serialize. But under the
-  mixed workload it is slightly *slower* than `SegmentedLockCache` (21.5M vs
-  22.5M): the write path must take the exclusive lock anyway, and the extra
-  `AtomicLong` stamp on every read costs something when reads are not pure.
-  This is the measured basis for [DR-007](docs/DESIGN.md).
-- **`ConcurrentMapCache` is 4–30× faster than every locking variant** and that is
-  the honest headline: locks are expensive. It is faster because it does almost
-  no bookkeeping — no ordering, no LRU, and an unordered eviction policy. The
-  numbers below show what that costs in hit rate.
-- **Eviction accuracy, not throughput, is what locks buy.** On a skewed workload
-  (capacity 64, 512 keys, 200,000 ops, seed 42), measured by
-  `EvictionQualityTest`:
+- **Segmentation improves throughput in these read workloads.**
+  `SegmentedLockCache` measured 1.45× the global-lock throughput on the hot set
+  and 1.93× on the wide set. `SegmentedRwLockCache` measured 3.01× and 5.99× the
+  global-lock throughput, respectively. These are results for this machine and
+  benchmark configuration, not general performance guarantees.
+- **Read/write locks help most on read-only workloads.** Compared with
+  `SegmentedLockCache`, `SegmentedRwLockCache` measured 2.08× throughput on the
+  hot set and 3.10× on the wide set. In the 90/10 mixed workload it measured
+  21.48M ops/s versus 22.52M ops/s for `SegmentedLockCache` (about 0.95×).
+  This is consistent with its shared-read-lock design, but these measurements
+  alone do not isolate the cost of any one implementation detail. See
+  [DR-007](docs/DESIGN.md) for the design trade-off.
+- **The map baseline was fastest in these measurements, with a different
+  eviction policy.** `ConcurrentMapCache` measured between 3.64× and 21.76× the
+  throughput of the locking variants across the reported workloads. The ratio
+  depends on workload and comparison. It avoids LRU ordering bookkeeping and
+  removes arbitrary entries on overflow; the fixed-seed hit-ratio measurement
+  below shows the result for one particular workload.
+- **Eviction results are workload-specific.** In the fixed workload measured by
+  `EvictionQualityTest` (capacity 64, 512-key space, 200,000 operations, seed 42):
 
   | Implementation | Hit ratio |
   |---|---:|
@@ -205,12 +208,12 @@ Linux 7.0.0-43, OpenJDK 25.0.5.
   | `GlobalLockCache` | 0.3056 |
   | `ConcurrentMapCache` | 0.0865 |
 
-  The baseline keeps **no ordering information**, so it hits 3.5× less often than
-  the LRU variants. Notably, segmented LRU *matched or slightly beat* global LRU
-  here rather than losing to it — with capacity 64 split across 16 segments and a
-  skew that fits each segment locally, the "approximate global LRU" penalty did
-  not materialize on this workload. The test therefore asserts only the robust
-  comparison (LRU beats the unordered baseline) and prints the rest.
+  For this workload, the LRU variants have higher hit ratios than the unordered
+  baseline. The segmented variants scored 0.3086 and global LRU scored 0.3056;
+  the test uses one fixed seed and does not establish whether that small
+  difference is meaningful or representative of other key distributions. The
+  generator chooses half of accesses uniformly from the first 51 keys and half
+  uniformly from the remaining 461 keys. See [the full benchmark notes](docs/BENCHMARKS.md).
 
 Run them yourself:
 
