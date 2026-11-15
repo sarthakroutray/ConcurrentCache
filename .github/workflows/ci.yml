@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MAVEN_ARGS: -B -ntp
+
+jobs:
+  build:
+    name: Build and test (JDK ${{ matrix.java }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ['17', '21']
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+
+      - name: Verify the whole reactor
+        run: mvn $MAVEN_ARGS verify
+
+      - name: Package the executable server jar
+        run: mvn $MAVEN_ARGS -pl cache-server -am package -DskipTests
+
+      - name: Upload server jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: cache-server-jar-jdk${{ matrix.java }}
+          path: cache-server/target/cache-server-*.jar
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports-jdk${{ matrix.java }}
+          path: '**/target/surefire-reports/'
+          if-no-files-found: ignore
+          retention-days: 7
+
+  smoke:
+    name: Container smoke test
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: concurrent-cache:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Start container and assert the API answers
+        run: |
+          set -euo pipefail
+          docker run -d --name cache -p 8080:8080 concurrent-cache:ci
+
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/actuator/health/readiness >/dev/null; then
+              echo "ready after ${i}s"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "container never became ready"
+              docker logs cache
+              exit 1
+            fi
+            sleep 1
+          done
+
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X PUT \
+            -H 'Content-Type: text/plain' --data 'alice' http://localhost:8080/keys/smoke)" = "201"
+          test "$(curl -s http://localhost:8080/keys/smoke)" = "alice"
+          test "$(curl -s http://localhost:8080/keys/smoke/increment -X POST -o /dev/null -w '%{http_code}')" = "409"
+          curl -s http://localhost:8080/stats
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f cache || true
