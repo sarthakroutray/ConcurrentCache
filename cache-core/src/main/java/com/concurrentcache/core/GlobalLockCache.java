@@ -12,7 +12,7 @@ import java.util.function.LongSupplier;
  * serializes, which makes correctness easy to argue and gives atomicity for
  * {@link #compute} for free.
  */
-public final class GlobalLockCache<K, V> implements Cache<K, V> {
+public final class GlobalLockCache<K, V> implements Cache<K, V>, SegmentSweepable {
 
     private final LockedLruStore<K, V> store;
     private final CacheStats stats = new CacheStats();
@@ -36,6 +36,11 @@ public final class GlobalLockCache<K, V> implements Cache<K, V> {
     }
 
     @Override
+    public boolean putIfAbsent(K key, V value, Duration ttl) {
+        return store.putIfAbsent(key, value, ttl);
+    }
+
+    @Override
     public boolean delete(K key) {
         return store.delete(key);
     }
@@ -53,5 +58,18 @@ public final class GlobalLockCache<K, V> implements Cache<K, V> {
     @Override
     public CacheStats stats() {
         return stats;
+    }
+
+    @Override
+    public int segmentCount() {
+        return 1;
+    }
+
+    @Override
+    public int sweepSegment(int index) {
+        if (index != 0) {
+            throw new IndexOutOfBoundsException("segment index out of range: " + index);
+        }
+        return store.sweepExpired();
     }
 }
