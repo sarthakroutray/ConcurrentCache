@@ -30,6 +30,13 @@ public interface Cache<K, V> {
     void put(K key, V value, Duration ttl);
 
     /**
+     * Stores {@code value} under {@code key} only if no live mapping exists,
+     * returning {@code true} when the value was stored. An expired mapping counts
+     * as absent and is replaced (and counted as one expiration).
+     */
+    boolean putIfAbsent(K key, V value, Duration ttl);
+
+    /**
      * Removes the mapping for {@code key}; returns {@code true} if one was removed.
      */
     boolean delete(K key);

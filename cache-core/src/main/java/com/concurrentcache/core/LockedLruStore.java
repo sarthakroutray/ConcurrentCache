@@ -121,24 +121,60 @@ final class LockedLruStore<K, V> {
         }
     }
 
-    long liveSize() {
+    boolean putIfAbsent(K key, V value, Duration ttl) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(value, "value");
+        long ttlNanos = Ttl.positiveNanos(ttl, "ttl");
         lock.lock();
         try {
             long now = timeSource.getAsLong();
-            long live = 0;
-            Iterator<Entry<V>> it = map.values().iterator();
-            while (it.hasNext()) {
-                if (now >= it.next().expiresAtNanos()) {
-                    it.remove();
-                    stats.recordExpiration();
-                } else {
-                    live++;
-                }
+            Entry<V> entry = map.get(key);
+            if (entry != null && now >= entry.expiresAtNanos()) {
+                map.remove(key);
+                stats.recordExpiration();
+                entry = null;
             }
-            return live;
+            if (entry != null) {
+                return false;
+            }
+            map.put(key, new Entry<>(value, now + ttlNanos));
+            evictOverflow();
+            return true;
         } finally {
             lock.unlock();
         }
+    }
+
+    long liveSize() {
+        lock.lock();
+        try {
+            purgeExpired(timeSource.getAsLong());
+            return map.size();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    int sweepExpired() {
+        lock.lock();
+        try {
+            return purgeExpired(timeSource.getAsLong());
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private int purgeExpired(long now) {
+        int removed = 0;
+        Iterator<Entry<V>> it = map.values().iterator();
+        while (it.hasNext()) {
+            if (now >= it.next().expiresAtNanos()) {
+                it.remove();
+                stats.recordExpiration();
+                removed++;
+            }
+        }
+        return removed;
     }
 
     private void evictOverflow() {

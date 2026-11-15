@@ -15,7 +15,7 @@ import java.util.function.LongSupplier;
  * segments. Independent keys that land in different segments are never blocked
  * by each other.
  */
-public final class SegmentedLockCache<K, V> implements Cache<K, V> {
+public final class SegmentedLockCache<K, V> implements Cache<K, V>, SegmentSweepable {
 
     private final List<LockedLruStore<K, V>> segments;
     private final int mask;
@@ -54,6 +54,11 @@ public final class SegmentedLockCache<K, V> implements Cache<K, V> {
     }
 
     @Override
+    public boolean putIfAbsent(K key, V value, Duration ttl) {
+        return segmentFor(key).putIfAbsent(key, value, ttl);
+    }
+
+    @Override
     public boolean delete(K key) {
         return segmentFor(key).delete(key);
     }
@@ -75,6 +80,19 @@ public final class SegmentedLockCache<K, V> implements Cache<K, V> {
     @Override
     public CacheStats stats() {
         return stats;
+    }
+
+    @Override
+    public int segmentCount() {
+        return segments.size();
+    }
+
+    @Override
+    public int sweepSegment(int index) {
+        if (index < 0 || index >= segments.size()) {
+            throw new IndexOutOfBoundsException("segment index out of range: " + index);
+        }
+        return segments.get(index).sweepExpired();
     }
 
     private LockedLruStore<K, V> segmentFor(K key) {

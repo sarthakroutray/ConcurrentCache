@@ -59,6 +59,40 @@ abstract class AbstractCacheTest {
     }
 
     @Test
+    void putIfAbsentCreatesOnlyWhenNoLiveMappingExists() {
+        Cache<String, String> cache = newCache(10);
+        assertTrue(cache.putIfAbsent("a", "1", Duration.ofSeconds(10)));
+        assertFalse(cache.putIfAbsent("a", "2", Duration.ofSeconds(10)));
+        assertEquals(Optional.of("1"), cache.get("a"));
+    }
+
+    @Test
+    void putIfAbsentReplacesExpiredMapping() {
+        Cache<String, String> cache = newCache(10);
+        cache.put("a", "old", Duration.ofSeconds(5));
+        time.advance(Duration.ofSeconds(6));
+        assertTrue(cache.putIfAbsent("a", "new", Duration.ofSeconds(60)));
+        assertEquals(Optional.of("new"), cache.get("a"));
+        assertEquals(1, cache.stats().expirations());
+    }
+
+    @Test
+    void sweepSegmentRemovesExpiredEntries() {
+        Cache<String, String> cache = newCache(10);
+        SegmentSweepable sweepable = (SegmentSweepable) cache;
+        cache.put("a", "1", Duration.ofSeconds(5));
+        cache.put("b", "2", Duration.ofSeconds(60));
+        time.advance(Duration.ofSeconds(6));
+        int removed = 0;
+        for (int i = 0; i < sweepable.segmentCount(); i++) {
+            removed += sweepable.sweepSegment(i);
+        }
+        assertEquals(1, removed);
+        assertEquals(1, cache.size());
+        assertEquals(Optional.of("2"), cache.get("b"));
+    }
+
+    @Test
     void entryIsLiveJustBeforeTtlAndGoneAtBoundary() {
         Cache<String, String> cache = newCache(10);
         cache.put("a", "1", Duration.ofSeconds(10));
@@ -177,5 +211,8 @@ abstract class AbstractCacheTest {
         assertThrows(IllegalArgumentException.class, () -> cache.put("k", "v", Duration.ZERO));
         assertThrows(IllegalArgumentException.class, () -> cache.put("k", "v", Duration.ofSeconds(-1)));
         assertThrows(NullPointerException.class, () -> cache.get(null));
+        assertThrows(NullPointerException.class, () -> cache.putIfAbsent(null, "v", Duration.ofSeconds(1)));
+        assertThrows(NullPointerException.class, () -> cache.putIfAbsent("k", null, Duration.ofSeconds(1)));
+        assertThrows(IllegalArgumentException.class, () -> cache.putIfAbsent("k", "v", Duration.ZERO));
     }
 }

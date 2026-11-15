@@ -16,7 +16,7 @@ import java.util.function.LongSupplier;
  * remaining overflow is removed in iteration order, which is not LRU. That is
  * the point of a baseline: no access bookkeeping, no ordering guarantee.
  */
-public final class ConcurrentMapCache<K, V> implements Cache<K, V> {
+public final class ConcurrentMapCache<K, V> implements Cache<K, V>, SegmentSweepable {
 
     private record Entry<V>(V value, long expiresAtNanos) {
     }
@@ -67,6 +67,31 @@ public final class ConcurrentMapCache<K, V> implements Cache<K, V> {
         long now = timeSource.getAsLong();
         map.put(key, new Entry<>(value, now + ttlNanos));
         enforceCapacity(now);
+    }
+
+    @Override
+    public boolean putIfAbsent(K key, V value, Duration ttl) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(value, "value");
+        long ttlNanos = Ttl.positiveNanos(ttl, "ttl");
+        long now = timeSource.getAsLong();
+        Entry<V> candidate = new Entry<>(value, now + ttlNanos);
+        while (true) {
+            Entry<V> existing = map.putIfAbsent(key, candidate);
+            if (existing == null) {
+                enforceCapacity(now);
+                return true;
+            }
+            if (now >= existing.expiresAtNanos()) {
+                if (map.replace(key, existing, candidate)) {
+                    stats.recordExpiration();
+                    enforceCapacity(now);
+                    return true;
+                }
+                continue;
+            }
+            return false;
+        }
     }
 
     @Override
@@ -125,6 +150,29 @@ public final class ConcurrentMapCache<K, V> implements Cache<K, V> {
     @Override
     public CacheStats stats() {
         return stats;
+    }
+
+    @Override
+    public int segmentCount() {
+        return 1;
+    }
+
+    @Override
+    public int sweepSegment(int index) {
+        if (index != 0) {
+            throw new IndexOutOfBoundsException("segment index out of range: " + index);
+        }
+        long now = timeSource.getAsLong();
+        int removed = 0;
+        Iterator<Map.Entry<K, Entry<V>>> it = map.entrySet().iterator();
+        while (it.hasNext()) {
+            if (now >= it.next().getValue().expiresAtNanos()) {
+                it.remove();
+                stats.recordExpiration();
+                removed++;
+            }
+        }
+        return removed;
     }
 
     private void enforceCapacity(long now) {

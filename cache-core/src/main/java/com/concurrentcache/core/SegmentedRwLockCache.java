@@ -21,7 +21,7 @@ import java.util.function.LongSupplier;
  * LRU (see docs/DESIGN.md DR-007 for why exact LRU cannot be done under a read
  * lock).
  */
-public final class SegmentedRwLockCache<K, V> implements Cache<K, V> {
+public final class SegmentedRwLockCache<K, V> implements Cache<K, V>, SegmentSweepable {
 
     private static final class Entry<V> {
         private final V value;
@@ -105,6 +105,32 @@ public final class SegmentedRwLockCache<K, V> implements Cache<K, V> {
     }
 
     @Override
+    public boolean putIfAbsent(K key, V value, Duration ttl) {
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(value, "value");
+        long ttlNanos = Ttl.positiveNanos(ttl, "ttl");
+        Segment<K, V> segment = segmentFor(key);
+        segment.lock.writeLock().lock();
+        try {
+            long now = timeSource.getAsLong();
+            Entry<V> entry = segment.map.get(key);
+            if (entry != null && now >= entry.expiresAtNanos) {
+                segment.map.remove(key);
+                stats.recordExpiration();
+                entry = null;
+            }
+            if (entry != null) {
+                return false;
+            }
+            segment.map.put(key, new Entry<>(value, now + ttlNanos, now));
+            evictOverflow(segment);
+            return true;
+        } finally {
+            segment.lock.writeLock().unlock();
+        }
+    }
+
+    @Override
     public boolean delete(K key) {
         Segment<K, V> segment = segmentFor(key);
         long now = timeSource.getAsLong();
@@ -177,6 +203,35 @@ public final class SegmentedRwLockCache<K, V> implements Cache<K, V> {
     @Override
     public CacheStats stats() {
         return stats;
+    }
+
+    @Override
+    public int segmentCount() {
+        return segments.size();
+    }
+
+    @Override
+    public int sweepSegment(int index) {
+        if (index < 0 || index >= segments.size()) {
+            throw new IndexOutOfBoundsException("segment index out of range: " + index);
+        }
+        Segment<K, V> segment = segments.get(index);
+        segment.lock.writeLock().lock();
+        try {
+            long now = timeSource.getAsLong();
+            int removed = 0;
+            Iterator<Map.Entry<K, Entry<V>>> it = segment.map.entrySet().iterator();
+            while (it.hasNext()) {
+                if (now >= it.next().getValue().expiresAtNanos) {
+                    it.remove();
+                    stats.recordExpiration();
+                    removed++;
+                }
+            }
+            return removed;
+        } finally {
+            segment.lock.writeLock().unlock();
+        }
     }
 
     private Optional<V> expireIfPresentAndRecordMiss(Segment<K, V> segment, K key, long now) {
