@@ -22,7 +22,7 @@ COPY cache-server/src cache-server/src
 RUN mvn -B -pl cache-server -am package -DskipTests
 
 # ---- Runtime stage ---------------------------------------------------------
-FROM eclipse-temurin:17-jre-jammy AS runtime
+FROM eclipse-temurin:25-jre-jammy AS runtime
 
 # curl is only used by the container healthcheck.
 RUN apt-get update \
