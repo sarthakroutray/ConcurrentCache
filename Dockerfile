@@ -3,7 +3,7 @@
 # ---- Build stage -----------------------------------------------------------
 # The whole reactor is built from source so the produced jar matches the local
 # build exactly. Only cache-server is packaged (it bundles cache-core).
-FROM maven:3.9-eclipse-temurin-17 AS build
+FROM maven:3.9-eclipse-temurin-26 AS build
 
 WORKDIR /workspace
 
