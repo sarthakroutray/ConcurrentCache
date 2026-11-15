@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: concurrent-cache
+
+cache:
+  implementation: global
+  capacity: 10000
+  segments: 16
+  default-ttl: 60s
+  max-value-length: 4096
+  sweep-interval: 30s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
