@@ -1,0 +1,14 @@
+.git
+.github
+.commandcode
+docs
+target
+*/target
+**/target
+cache-bench/src
+*.iml
+.idea
+.vscode
+.DS_Store
+bench-results.json
+README.md
